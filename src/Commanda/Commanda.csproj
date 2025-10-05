@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+  <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>Commanda</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>rc</VersionSuffix>
+    <Authors>Lars Nyström</Authors>
+    <Description>Cocona-like CLI builder for .NET using HostBuilder and System.CommandLine.</Description>
+    <RepositoryUrl>https://github.com/LittleAndi/Commanda</RepositoryUrl>
+    <PackageTags>cli;commandline;hostbuilder;cocona;system.commandline</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.0-rc.1.25451.107" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="/README.md" Condition="Exists('..\..\README.md')" />
+  </ItemGroup>
+
+</Project>
