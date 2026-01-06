@@ -1,12 +1,6 @@
 # Commanda
 
-A lightweight, Cocona-like command line builder for .NET 9, combining `System.CommandLine` with the Generic Host (`HostBuilder`).
-
-> NOTE: `System.CommandLine` is still in prerelease. Until a stable 2.x is published you must add it with the `--prerelease` flag:
->
-> ```bash
-> dotnet add package System.CommandLine --prerelease
-> ```
+A lightweight, Cocona-like command line builder for .NET 10, combining `System.CommandLine` with the Generic Host (`HostBuilder`).
 
 ## Features
 
@@ -58,12 +52,6 @@ builder.AddCommand("hello", (GreetingService svc) => svc.SayHello());
 ## Installation (Future NuGet)
 
 Planned package id: `Commanda`.
-
-While experimenting locally (before the library is published), ensure the prerelease `System.CommandLine` dependency is available in your app project:
-
-```bash
-dotnet add package System.CommandLine --prerelease
-```
 
 ## Roadmap / Future Enhancements
 
