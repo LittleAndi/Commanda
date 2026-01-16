@@ -1,6 +1,8 @@
 # Commanda
 
-A lightweight, Cocona-like command line builder for .NET 10, combining `System.CommandLine` with the Generic Host (`HostBuilder`).
+A lightweight, Cocona-like command line builder for .NET, combining `System.CommandLine` with the Generic Host (`HostBuilder`).
+
+Supported target frameworks: `net8.0`, `net9.0`, `net10.0`.
 
 ## Features
 
@@ -52,6 +54,21 @@ builder.AddCommand("hello", (GreetingService svc) => svc.SayHello());
 ## Installation (Future NuGet)
 
 Planned package id: `Commanda`.
+
+### Versioning & Releases (Nerdbank.GitVersioning)
+
+This repo uses Nerdbank.GitVersioning (NBGV) for SemVer and RC builds.
+
+- Base version is defined in `version.json` (e.g., `0.2.0`).
+- RC builds are produced from tags like `v0.2.0-rc.1`, `v0.2.0-rc.2`, etc.
+- Stable releases are produced from tags like `v0.2.0`.
+
+Typical flow:
+
+1. Tag an RC: `git tag v0.2.0-rc.1 && git push origin v0.2.0-rc.1`
+2. Build/package and publish RC to NuGet.
+3. After validation, tag stable: `git tag v0.2.0 && git push origin v0.2.0`
+4. Build/package and publish stable.
 
 ## Roadmap / Future Enhancements
 
