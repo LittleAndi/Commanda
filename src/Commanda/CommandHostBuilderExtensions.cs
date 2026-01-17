@@ -1,11 +1,8 @@
-namespace Commanda;
-
-using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using System.Linq.Expressions;
+
+namespace Commanda;
 
 public static class CommandHostBuilderExtensions
 {
@@ -90,181 +87,320 @@ public static class CommandHostBuilderExtensions
             return 1;
         }
 
-        var sp = host.Services;
-
-        // Store binding configuration per command
-        var bindingMap = new Dictionary<string, (ParameterInfo[] parameters, List<(int index, Type type, bool isCli, bool isOption, object symbol, string? alias)> bindings, List<(int index, Type type)> diParams)>();
-
-        foreach (var descriptor in registry.Descriptors)
-        {
-            var parameters = descriptor.Parameters;
-            // Track how to bind each parameter at invocation time.
-            var bindings = new List<(int index, Type type, bool isCli, bool isOption, object symbol, string? alias)>();
-            var diParams = new List<(int index, Type type)>();
-
-            for (int i = 0; i < parameters.Length; i++)
-            {
-                var p = parameters[i];
-                var pType = p.ParameterType;
-
-                // DI-only for non-string reference types.
-                if (pType != typeof(string) && !pType.IsValueType)
-                {
-                    diParams.Add((i, pType));
-                    continue;
-                }
-
-                var optAttr = p.GetCustomAttribute<OptionAttribute>();
-                if (optAttr != null)
-                {
-                    var aliasLong = "--" + (string.IsNullOrWhiteSpace(optAttr.Name) ? ToKebabCase(p.Name!) : optAttr.Name);
-                    // We only need alias and type for manual parsing
-                    bindings.Add((i, pType, true, true, aliasLong /*symbol unused*/, aliasLong));
-                }
-                else
-                {
-                    // Positional argument: keep index and type only
-                    bindings.Add((i, pType, true, false, p.Name!, null));
-                }
-            }
-
-            // Cache binding info for invocation
-            bindingMap[descriptor.Name] = (parameters, bindings, diParams);
-
-            // No System.CommandLine runtime wiring; manual dispatch below.
-        }
-
-        // If no args, print help summary
         if (args.Length == 0)
         {
             PrintHelp(registry);
             return 0;
         }
 
-        // Manual dispatch to selected command name
+        var bindingMap = BuildBindingMap(registry);
         var invokedName = args[0];
-        if (string.IsNullOrEmpty(invokedName) || !bindingMap.TryGetValue(invokedName!, out var bindInfo))
+
+        if (string.IsNullOrEmpty(invokedName) || !bindingMap.TryGetValue(invokedName, out var bindInfo))
         {
             Console.Error.WriteLine("Unknown or missing command.\n");
             PrintHelp(registry);
             return 1;
         }
 
-        var (paramInfos, paramBindings, paramDiParams) = bindInfo;
-        var finalArgs = new object?[paramInfos.Length];
+        var finalArgs = new object?[bindInfo.Parameters.Length];
+        ParseCommandLineArguments(args.Skip(1).ToArray(), bindInfo, finalArgs);
 
-        // Manual parse of tokens: options ("--alias" [value]) and positional arguments
-        var tokens = args.Skip(1).ToList();
-        var optMap = paramBindings.Where(b => b.isOption && b.alias != null)
-            .ToDictionary(b => b.alias!, b => b);
-        var argQueue = new Queue<(int index, Type type)>(paramBindings.Where(b => !b.isOption).Select(b => (b.index, b.type)));
-
-        for (int ti = 0; ti < tokens.Count; ti++)
+        if (!ApplyDefaultsAndValidate(bindInfo.Parameters, finalArgs))
         {
-            var tok = tokens[ti];
-            if (tok.StartsWith("--"))
+            return 1;
+        }
+
+        ResolveDependencyInjectionParameters(host.Services, bindInfo.DiParams, finalArgs);
+
+        var selectedDescriptor = registry.Descriptors.First(d => d.Name == invokedName);
+        await InvokeCommandHandler(selectedDescriptor, finalArgs, host.Services);
+
+        return 0;
+    }
+
+    private record ParameterBinding(
+        int Index,
+        Type Type,
+        bool IsCliArgument,
+        bool IsOption,
+        string? Alias = null
+    );
+
+    private record DependencyInjectionParameter(
+        int Index,
+        Type Type
+    );
+
+    private record BindingInfo(
+        ParameterInfo[] Parameters,
+        List<ParameterBinding> Bindings,
+        List<DependencyInjectionParameter> DiParams
+    );
+
+    private class TokenParser
+    {
+        private readonly string[] _tokens;
+        private int _currentIndex;
+
+        public TokenParser(string[] tokens)
+        {
+            _tokens = tokens;
+            _currentIndex = 0;
+        }
+
+        public bool HasMoreTokens => _currentIndex < _tokens.Length;
+        public string CurrentToken => _tokens[_currentIndex];
+
+        public void Advance() => _currentIndex++;
+
+        public bool TryPeekNext(out string? nextToken)
+        {
+            if (_currentIndex + 1 < _tokens.Length)
             {
-                if (!optMap.TryGetValue(tok, out var b)) continue; // unknown options ignored
-                if (b.type == typeof(bool))
+                nextToken = _tokens[_currentIndex + 1];
+                return true;
+            }
+            nextToken = null;
+            return false;
+        }
+
+        public bool PeekNextStartsWith(string prefix)
+        {
+            return TryPeekNext(out var next) && next != null && next.StartsWith(prefix, StringComparison.Ordinal);
+        }
+
+        public string? ConsumeNext()
+        {
+            if (TryPeekNext(out var next))
+            {
+                _currentIndex++;
+                return next;
+            }
+            return null;
+        }
+    }
+
+    private class ParameterContext
+    {
+        public ParameterInfo Parameter { get; }
+        public object?[] FinalArgs { get; }
+        public int Index { get; }
+
+        public ParameterContext(ParameterInfo parameter, object?[] finalArgs, int index)
+        {
+            Parameter = parameter;
+            FinalArgs = finalArgs;
+            Index = index;
+        }
+
+        public object? CurrentValue => FinalArgs[Index];
+        public void SetValue(object? value) => FinalArgs[Index] = value;
+    }
+
+    private static Dictionary<string, BindingInfo> BuildBindingMap(CommandRegistry registry)
+    {
+        var bindingMap = new Dictionary<string, BindingInfo>();
+
+        foreach (var descriptor in registry.Descriptors)
+        {
+            var parameters = descriptor.Parameters;
+            var bindings = new List<ParameterBinding>();
+            var diParams = new List<DependencyInjectionParameter>();
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                var p = parameters[i];
+                var pType = p.ParameterType;
+
+                if (pType != typeof(string) && !pType.IsValueType)
                 {
-                    bool val = true;
-                    if (ti + 1 < tokens.Count && !tokens[ti + 1].StartsWith("--", StringComparison.Ordinal))
-                    {
-                        if (bool.TryParse(tokens[ti + 1], out var parsed))
-                        {
-                            val = parsed;
-                            ti++;
-                        }
-                    }
-                    finalArgs[b.index] = val;
+                    diParams.Add(new DependencyInjectionParameter(i, pType));
+                    continue;
+                }
+
+                var optAttr = p.GetCustomAttribute<OptionAttribute>();
+                if (optAttr != null)
+                {
+                    var alias = "--" + (string.IsNullOrWhiteSpace(optAttr.Name) ? ToKebabCase(p.Name!) : optAttr.Name);
+                    bindings.Add(new ParameterBinding(i, pType, IsCliArgument: true, IsOption: true, Alias: alias));
                 }
                 else
                 {
-                    if (ti + 1 < tokens.Count && !tokens[ti + 1].StartsWith("--", StringComparison.Ordinal))
-                    {
-                        try
-                        {
-                            var converted = Convert.ChangeType(tokens[ti + 1], b.type);
-                            finalArgs[b.index] = converted;
-                            ti++;
-                        }
-                        catch
-                        {
-                            // leave unset; will be validated later
-                        }
-                    }
+                    bindings.Add(new ParameterBinding(i, pType, IsCliArgument: true, IsOption: false));
                 }
+            }
+
+            bindingMap[descriptor.Name] = new BindingInfo(parameters, bindings, diParams);
+        }
+
+        return bindingMap;
+    }
+
+    private static void ParseCommandLineArguments(string[] tokens, BindingInfo bindInfo, object?[] finalArgs)
+    {
+        var parser = new TokenParser(tokens);
+        var optMap = bindInfo.Bindings
+            .Where(b => b.IsOption && b.Alias != null)
+            .ToDictionary(b => b.Alias!, b => b);
+
+        var argQueue = new Queue<ParameterBinding>(
+            bindInfo.Bindings.Where(b => !b.IsOption));
+
+        while (parser.HasMoreTokens)
+        {
+            var token = parser.CurrentToken;
+
+            if (token.StartsWith("--"))
+            {
+                if (optMap.TryGetValue(token, out var binding))
+                {
+                    finalArgs[binding.Index] = binding.Type == typeof(bool)
+                        ? ParseBooleanOption(parser)
+                        : ParseTypedOption(parser, binding.Type);
+                }
+                parser.Advance();
             }
             else if (argQueue.Count > 0)
             {
-                var (idx, ptype) = argQueue.Dequeue();
-                try
-                {
-                    finalArgs[idx] = Convert.ChangeType(tok, ptype);
-                }
-                catch
-                {
-                    // leave unset; will be validated later
-                }
-            }
-        }
-
-        // Apply defaults and validate requireds
-        for (int i = 0; i < paramInfos.Length; i++)
-        {
-            if (finalArgs[i] != null) continue;
-            var p = paramInfos[i];
-            if (p.ParameterType != typeof(string) && !p.ParameterType.IsValueType)
-            {
-                // DI param handled later
-                continue;
-            }
-            var optAttr = p.GetCustomAttribute<OptionAttribute>();
-            if (optAttr != null)
-            {
-                if (p.ParameterType == typeof(bool))
-                {
-                    finalArgs[i] = p.HasDefaultValue ? p.DefaultValue : false;
-                }
-                else if (p.HasDefaultValue)
-                {
-                    finalArgs[i] = p.DefaultValue;
-                }
-                else
-                {
-                    Console.Error.WriteLine($"Missing required option '--{(string.IsNullOrWhiteSpace(optAttr.Name) ? ToKebabCase(p.Name!) : optAttr.Name)}'.");
-                    return 1;
-                }
+                var binding = argQueue.Dequeue();
+                finalArgs[binding.Index] = TryConvertType(token, binding.Type);
+                parser.Advance();
             }
             else
             {
-                if (p.HasDefaultValue)
-                {
-                    finalArgs[i] = p.DefaultValue;
-                }
-                else
-                {
-                    Console.Error.WriteLine($"Missing required argument '{p.Name}'.");
-                    return 1;
-                }
+                parser.Advance();
             }
         }
+    }
 
-        foreach (var (index, type) in paramDiParams)
+    private static bool ParseBooleanOption(TokenParser parser)
+    {
+        bool val = true;
+        if (!parser.PeekNextStartsWith("--"))
         {
-            finalArgs[index] = sp.GetService(type);
+            var next = parser.ConsumeNext();
+            if (next != null && bool.TryParse(next, out var parsed))
+            {
+                val = parsed;
+            }
         }
+        return val;
+    }
 
-        var selectedDescriptor = registry.Descriptors.First(d => d.Name == invokedName);
-        var handlerParams = selectedDescriptor.Handler.Method.GetParameters();
-        object? invokeResult;
-        if (handlerParams.Length == paramInfos.Length)
+    private static object? ParseTypedOption(TokenParser parser, Type targetType)
+    {
+        if (!parser.PeekNextStartsWith("--"))
         {
-            invokeResult = selectedDescriptor.Handler.DynamicInvoke(finalArgs);
+            var next = parser.ConsumeNext();
+            if (next != null)
+            {
+                return TryConvertType(next, targetType);
+            }
+        }
+        return null;
+    }
+
+    private static object? TryConvertType(string value, Type targetType)
+    {
+        try
+        {
+            return Convert.ChangeType(value, targetType);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool ApplyDefaultsAndValidate(ParameterInfo[] parameters, object?[] finalArgs)
+    {
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            var context = new ParameterContext(parameters[i], finalArgs, i);
+
+            if (!NeedsDefaultValue(context))
+            {
+                continue;
+            }
+
+            if (!ApplyDefaultForParameter(context))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool NeedsDefaultValue(ParameterContext context)
+    {
+        if (context.CurrentValue != null) return false;
+        if (context.Parameter.ParameterType != typeof(string) && !context.Parameter.ParameterType.IsValueType) return false;
+        return true;
+    }
+
+    private static bool ApplyDefaultForParameter(ParameterContext context)
+    {
+        var optAttr = context.Parameter.GetCustomAttribute<OptionAttribute>();
+
+        return optAttr != null
+            ? ApplyOptionDefault(context, optAttr)
+            : ApplyArgumentDefault(context);
+    }
+
+    private static bool ApplyOptionDefault(ParameterContext context, OptionAttribute optAttr)
+    {
+        if (context.Parameter.ParameterType == typeof(bool))
+        {
+            context.SetValue(context.Parameter.HasDefaultValue ? context.Parameter.DefaultValue : false);
+        }
+        else if (context.Parameter.HasDefaultValue)
+        {
+            context.SetValue(context.Parameter.DefaultValue);
+        }
+        else
+        {
+            var optionName = string.IsNullOrWhiteSpace(optAttr.Name) ? ToKebabCase(context.Parameter.Name!) : optAttr.Name;
+            Console.Error.WriteLine($"Missing required option '--{optionName}'.");
+            return false;
+        }
+        return true;
+    }
+
+    private static bool ApplyArgumentDefault(ParameterContext context)
+    {
+        if (context.Parameter.HasDefaultValue)
+        {
+            context.SetValue(context.Parameter.DefaultValue);
+        }
+        else
+        {
+            Console.Error.WriteLine($"Missing required argument '{context.Parameter.Name}'.");
+            return false;
+        }
+        return true;
+    }
+
+    private static void ResolveDependencyInjectionParameters(IServiceProvider serviceProvider, List<DependencyInjectionParameter> diParams, object?[] finalArgs)
+    {
+        foreach (var param in diParams)
+        {
+            finalArgs[param.Index] = serviceProvider.GetService(param.Type);
+        }
+    }
+
+    private static async Task InvokeCommandHandler(CommandDescriptor descriptor, object?[] finalArgs, IServiceProvider serviceProvider)
+    {
+        var handlerParams = descriptor.Handler.Method.GetParameters();
+        object? invokeResult;
+
+        if (handlerParams.Length == finalArgs.Length)
+        {
+            invokeResult = descriptor.Handler.DynamicInvoke(finalArgs);
         }
         else if (handlerParams.Length == 2 && handlerParams[0].ParameterType == typeof(IServiceProvider))
         {
-            invokeResult = selectedDescriptor.Handler.DynamicInvoke(new object?[] { sp, finalArgs });
+            invokeResult = descriptor.Handler.DynamicInvoke(new object?[] { serviceProvider, finalArgs });
         }
         else
         {
@@ -275,8 +411,6 @@ public static class CommandHostBuilderExtensions
         {
             await t.ConfigureAwait(false);
         }
-
-        return 0;
     }
 
     private static void PrintHelp(CommandRegistry registry)
@@ -307,13 +441,14 @@ public static class CommandHostBuilderExtensions
     private static string ToKebabCase(string name)
     {
         if (string.IsNullOrEmpty(name)) return name;
+
         var chars = new List<char>(name.Length * 2);
         for (int i = 0; i < name.Length; i++)
         {
             var c = name[i];
             if (char.IsUpper(c))
             {
-                if (i > 0 && (char.IsLower(name[i - 1]) || (i + 1 < name.Length && char.IsLower(name[i + 1]))))
+                if (ShouldInsertDashBeforeUpperCase(name, i))
                 {
                     chars.Add('-');
                 }
@@ -325,6 +460,23 @@ public static class CommandHostBuilderExtensions
             }
         }
         return new string(chars.ToArray());
+    }
+
+    private static bool ShouldInsertDashBeforeUpperCase(string name, int index)
+    {
+        if (index == 0) return false;
+
+        return IsPrecededByLowerCase(name, index) || IsFollowedByLowerCase(name, index);
+    }
+
+    private static bool IsPrecededByLowerCase(string name, int index)
+    {
+        return index > 0 && char.IsLower(name[index - 1]);
+    }
+
+    private static bool IsFollowedByLowerCase(string name, int index)
+    {
+        return index + 1 < name.Length && char.IsLower(name[index + 1]);
     }
 }
 

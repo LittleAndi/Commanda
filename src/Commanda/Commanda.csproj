@@ -17,8 +17,6 @@
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.2" />
-    <!-- Nerdbank.GitVersioning drives Version, FileVersion, InformationalVersion via Git tags -->
-    <PackageReference Include="Nerdbank.GitVersioning" Version="3.9.50" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- TFM-conditional Hosting package references to align with runtime major versions -->
