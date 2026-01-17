@@ -2,10 +2,11 @@ namespace Commanda.Example;
 
 public class GreetingService
 {
-    public void SayHello() => Console.WriteLine("Hello from GreetingService!");
-    public Task SayHelloAsync(string name)
+    public static void SayHello() => Console.WriteLine("Hello from GreetingService!");
+    public static Task SayHelloAsync(string name, bool excited = false)
     {
-        Console.WriteLine($"Hello {name} from async service!");
+        var excitedSuffix = excited ? "!" : ".";
+        Console.WriteLine($"Hello {name} from async service{excitedSuffix}");
         return Task.CompletedTask;
     }
 }

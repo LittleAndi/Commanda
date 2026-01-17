@@ -19,8 +19,18 @@ builder.AddCommand("sum", (int a, int b) =>
     Console.WriteLine(a + b);
 });
 
-builder.AddCommand("hello", (GreetingService svc) => svc.SayHello());
-builder.AddCommand("hello-async", async (GreetingService svc, string name) => await svc.SayHelloAsync(name));
+builder.AddCommand("hello", (GreetingService svc) => GreetingService.SayHello());
+builder.AddCommand("hello-async", async (GreetingService svc, string name) => await GreetingService.SayHelloAsync(name));
+
+// Example with Option attributes: alias inference and bool flag
+builder.AddCommand("hello-opt", async (
+    GreetingService svc,
+    [Option(Description = "Name to greet")] string name,
+    [Option("excited", Description = "Add exclamation (default false)")] bool excited = false
+) =>
+{
+    await GreetingService.SayHelloAsync(name, excited);
+});
 
 var host = builder.Build();
 return await host.RunCommandsAsync(args);

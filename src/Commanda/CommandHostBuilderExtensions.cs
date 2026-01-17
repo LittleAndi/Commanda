@@ -84,58 +84,163 @@ public static class CommandHostBuilderExtensions
     public static async Task<int> RunCommandsAsync(this IHost host, string[] args)
     {
         var registry = host.Services.GetService<CommandRegistry>();
-        if (registry == null)
+        if (registry == null || registry.Descriptors.Count == 0)
         {
             Console.Error.WriteLine("No commands registered.");
             return 1;
         }
 
+        var sp = host.Services;
+
+        // Store binding configuration per command
+        var bindingMap = new Dictionary<string, (ParameterInfo[] parameters, List<(int index, Type type, bool isCli, bool isOption, object symbol, string? alias)> bindings, List<(int index, Type type)> diParams)>();
+
+        foreach (var descriptor in registry.Descriptors)
+        {
+            var parameters = descriptor.Parameters;
+            // Track how to bind each parameter at invocation time.
+            var bindings = new List<(int index, Type type, bool isCli, bool isOption, object symbol, string? alias)>();
+            var diParams = new List<(int index, Type type)>();
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                var p = parameters[i];
+                var pType = p.ParameterType;
+
+                // DI-only for non-string reference types.
+                if (pType != typeof(string) && !pType.IsValueType)
+                {
+                    diParams.Add((i, pType));
+                    continue;
+                }
+
+                var optAttr = p.GetCustomAttribute<OptionAttribute>();
+                if (optAttr != null)
+                {
+                    var aliasLong = "--" + (string.IsNullOrWhiteSpace(optAttr.Name) ? ToKebabCase(p.Name!) : optAttr.Name);
+                    // We only need alias and type for manual parsing
+                    bindings.Add((i, pType, true, true, aliasLong /*symbol unused*/, aliasLong));
+                }
+                else
+                {
+                    // Positional argument: keep index and type only
+                    bindings.Add((i, pType, true, false, p.Name!, null));
+                }
+            }
+
+            // Cache binding info for invocation
+            bindingMap[descriptor.Name] = (parameters, bindings, diParams);
+
+            // No System.CommandLine runtime wiring; manual dispatch below.
+        }
+
+        // If no args, print help summary
         if (args.Length == 0)
         {
             PrintHelp(registry);
             return 0;
         }
 
-        var cmdName = args[0];
-        var descriptor = registry.Descriptors.FirstOrDefault(d => string.Equals(d.Name, cmdName, StringComparison.OrdinalIgnoreCase));
-        if (descriptor == null)
+        // Manual dispatch to selected command name
+        var invokedName = args[0];
+        if (string.IsNullOrEmpty(invokedName) || !bindingMap.TryGetValue(invokedName!, out var bindInfo))
         {
-            Console.Error.WriteLine($"Unknown command '{cmdName}'.\n");
+            Console.Error.WriteLine("Unknown or missing command.\n");
             PrintHelp(registry);
             return 1;
         }
 
-        var parameters = descriptor.Parameters;
-        var provided = args.Skip(1).ToArray();
-        var finalArgs = new object?[parameters.Length];
-        int valueTokenIndex = 0;
-        var sp = host.Services;
+        var (paramInfos, paramBindings, paramDiParams) = bindInfo;
+        var finalArgs = new object?[paramInfos.Length];
 
-        for (int i = 0; i < parameters.Length; i++)
+        // Manual parse of tokens: options ("--alias" [value]) and positional arguments
+        var tokens = args.Skip(1).ToList();
+        var optMap = paramBindings.Where(b => b.isOption && b.alias != null)
+            .ToDictionary(b => b.alias!, b => b);
+        var argQueue = new Queue<(int index, Type type)>(paramBindings.Where(b => !b.isOption).Select(b => (b.index, b.type)));
+
+        for (int ti = 0; ti < tokens.Count; ti++)
         {
-            var p = parameters[i];
-            object? value = null;
+            var tok = tokens[ti];
+            if (tok.StartsWith("--"))
+            {
+                if (!optMap.TryGetValue(tok, out var b)) continue; // unknown options ignored
+                if (b.type == typeof(bool))
+                {
+                    bool val = true;
+                    if (ti + 1 < tokens.Count && !tokens[ti + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        if (bool.TryParse(tokens[ti + 1], out var parsed))
+                        {
+                            val = parsed;
+                            ti++;
+                        }
+                    }
+                    finalArgs[b.index] = val;
+                }
+                else
+                {
+                    if (ti + 1 < tokens.Count && !tokens[ti + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        try
+                        {
+                            var converted = Convert.ChangeType(tokens[ti + 1], b.type);
+                            finalArgs[b.index] = converted;
+                            ti++;
+                        }
+                        catch
+                        {
+                            // leave unset; will be validated later
+                        }
+                    }
+                }
+            }
+            else if (argQueue.Count > 0)
+            {
+                var (idx, ptype) = argQueue.Dequeue();
+                try
+                {
+                    finalArgs[idx] = Convert.ChangeType(tok, ptype);
+                }
+                catch
+                {
+                    // leave unset; will be validated later
+                }
+            }
+        }
+
+        // Apply defaults and validate requireds
+        for (int i = 0; i < paramInfos.Length; i++)
+        {
+            if (finalArgs[i] != null) continue;
+            var p = paramInfos[i];
             if (p.ParameterType != typeof(string) && !p.ParameterType.IsValueType)
             {
-                value = sp.GetService(p.ParameterType);
+                // DI param handled later
+                continue;
             }
-            else
+            var optAttr = p.GetCustomAttribute<OptionAttribute>();
+            if (optAttr != null)
             {
-                if (valueTokenIndex < provided.Length)
+                if (p.ParameterType == typeof(bool))
                 {
-                    try
-                    {
-                        value = Convert.ChangeType(provided[valueTokenIndex], p.ParameterType);
-                        valueTokenIndex++;
-                    }
-                    catch
-                    {
-                        value = p.HasDefaultValue ? p.DefaultValue : (p.ParameterType.IsValueType ? Activator.CreateInstance(p.ParameterType) : null);
-                    }
+                    finalArgs[i] = p.HasDefaultValue ? p.DefaultValue : false;
                 }
                 else if (p.HasDefaultValue)
                 {
-                    value = p.DefaultValue;
+                    finalArgs[i] = p.DefaultValue;
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Missing required option '--{(string.IsNullOrWhiteSpace(optAttr.Name) ? ToKebabCase(p.Name!) : optAttr.Name)}'.");
+                    return 1;
+                }
+            }
+            else
+            {
+                if (p.HasDefaultValue)
+                {
+                    finalArgs[i] = p.DefaultValue;
                 }
                 else
                 {
@@ -143,11 +248,34 @@ public static class CommandHostBuilderExtensions
                     return 1;
                 }
             }
-            finalArgs[i] = value;
         }
 
-        var result = descriptor.Handler.DynamicInvoke(finalArgs);
-        if (result is Task task) await task.ConfigureAwait(false);
+        foreach (var (index, type) in paramDiParams)
+        {
+            finalArgs[index] = sp.GetService(type);
+        }
+
+        var selectedDescriptor = registry.Descriptors.First(d => d.Name == invokedName);
+        var handlerParams = selectedDescriptor.Handler.Method.GetParameters();
+        object? invokeResult;
+        if (handlerParams.Length == paramInfos.Length)
+        {
+            invokeResult = selectedDescriptor.Handler.DynamicInvoke(finalArgs);
+        }
+        else if (handlerParams.Length == 2 && handlerParams[0].ParameterType == typeof(IServiceProvider))
+        {
+            invokeResult = selectedDescriptor.Handler.DynamicInvoke(new object?[] { sp, finalArgs });
+        }
+        else
+        {
+            throw new InvalidOperationException("Unsupported handler signature.");
+        }
+
+        if (invokeResult is Task t)
+        {
+            await t.ConfigureAwait(false);
+        }
+
         return 0;
     }
 
@@ -156,9 +284,47 @@ public static class CommandHostBuilderExtensions
         Console.WriteLine("Available commands:");
         foreach (var d in registry.Descriptors.OrderBy(d => d.Name))
         {
-            var sig = string.Join(" ", d.Parameters.Select(p => p.Name));
-            Console.WriteLine($"  {d.Name} {sig}    {d.Description}");
+            var parts = new List<string>();
+            foreach (var p in d.Parameters)
+            {
+                var opt = p.GetCustomAttribute<OptionAttribute>();
+                if (opt != null)
+                {
+                    var alias = string.IsNullOrWhiteSpace(opt.Name) ? ToKebabCase(p.Name!) : opt.Name!;
+                    var desc = string.IsNullOrWhiteSpace(opt.Description) ? string.Empty : $" : {opt.Description}";
+                    parts.Add($"[--{alias}{desc}]");
+                }
+                else
+                {
+                    parts.Add(p.Name!);
+                }
+            }
+            Console.WriteLine($"  {d.Name} {string.Join(" ", parts)}    {d.Description}");
         }
+        Console.WriteLine("Use --help for detailed help if supported.");
+    }
+
+    private static string ToKebabCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        var chars = new List<char>(name.Length * 2);
+        for (int i = 0; i < name.Length; i++)
+        {
+            var c = name[i];
+            if (char.IsUpper(c))
+            {
+                if (i > 0 && (char.IsLower(name[i - 1]) || (i + 1 < name.Length && char.IsLower(name[i + 1]))))
+                {
+                    chars.Add('-');
+                }
+                chars.Add(char.ToLowerInvariant(c));
+            }
+            else
+            {
+                chars.Add(c);
+            }
+        }
+        return new string(chars.ToArray());
     }
 }
 
