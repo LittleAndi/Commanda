@@ -1,12 +1,8 @@
 # Commanda
 
-A lightweight, Cocona-like command line builder for .NET 9, combining `System.CommandLine` with the Generic Host (`HostBuilder`).
+A lightweight, Cocona-like command line builder for .NET, combining `System.CommandLine` with the Generic Host (`HostBuilder`).
 
-> NOTE: `System.CommandLine` is still in prerelease. Until a stable 2.x is published you must add it with the `--prerelease` flag:
->
-> ```bash
-> dotnet add package System.CommandLine --prerelease
-> ```
+Supported target frameworks: `net8.0`, `net9.0`, `net10.0`.
 
 ## Features
 
@@ -59,11 +55,49 @@ builder.AddCommand("hello", (GreetingService svc) => svc.SayHello());
 
 Planned package id: `Commanda`.
 
-While experimenting locally (before the library is published), ensure the prerelease `System.CommandLine` dependency is available in your app project:
+### Versioning & Releases (nbgv CLI)
+
+We use the `nbgv` CLI and publish on tags. No separate release branches are required.
+
+Install:
 
 ```bash
-dotnet add package System.CommandLine --prerelease
+dotnet tool install -g nbgv
 ```
+
+Set the next development version on main:
+
+```bash
+# Example: bump to 0.3.0 pre-release
+nbgv set-version 0.3.0-alpha
+git commit -am "Set version to 0.3.0-alpha"
+git push
+```
+
+Create and publish a Release Candidate (on main or a feature branch you plan to release):
+
+```bash
+# Tag the RC and push the tag
+nbgv tag 0.3.0-rc.1
+git push origin v0.3.0-rc.1
+```
+
+Publish a stable release:
+
+```bash
+# Remove pre-release, set the final version, tag, and push
+nbgv set-version 0.3.0
+git commit -am "Set version to 0.3.0"
+nbgv tag 0.3.0
+git push origin v0.3.0
+```
+
+CI publishes to nuget.org on tags matching `v*` using Trusted Publishing (OIDC). Ensure nuget.org Trusted Publishing is configured for this repo/workflow.
+
+Tips:
+
+- Do not move tags after publishing to NuGet; use a new tag (e.g., `-rc.2`) instead.
+- Make sure your tags use the `v` prefix; if so, set `"tagPrefix": "v"` in `version.json`.
 
 ## Roadmap / Future Enhancements
 
