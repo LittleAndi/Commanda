@@ -84,6 +84,10 @@ dotnet run --project examples/Commanda.Example -- hello-opt --name Alice
 dotnet run --project examples/Commanda.Example -- hello-opt --name Bob --excited
 ```
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
+
 ## Roadmap / Future Enhancements
 
 - Attribute-based command & option metadata
