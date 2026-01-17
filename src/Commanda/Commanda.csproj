@@ -16,9 +16,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.CommandLine" Version="2.0.1" />
+    <PackageReference Include="System.CommandLine" Version="2.0.2" />
     <!-- Nerdbank.GitVersioning drives Version, FileVersion, InformationalVersion via Git tags -->
-    <PackageReference Include="Nerdbank.GitVersioning" Version="3.6.133" PrivateAssets="all" />
+    <PackageReference Include="Nerdbank.GitVersioning" Version="3.9.50" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- TFM-conditional Hosting package references to align with runtime major versions -->
@@ -26,10 +26,10 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.12" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
   </ItemGroup>
 
   <ItemGroup>
