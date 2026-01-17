@@ -75,6 +75,10 @@ jobs:
         with:
           fetch-depth: 0 # full history
           fetch-tags: true # when versioning off tags
+      - name: Show tag at HEAD
+        run: |
+          git tag --points-at HEAD || true
+          git describe --tags --always || true
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
