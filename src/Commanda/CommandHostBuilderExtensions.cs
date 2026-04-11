@@ -414,6 +414,11 @@ public static class CommandHostBuilderExtensions
     }
 
     private static void PrintHelp(CommandRegistry registry)
+    private static bool IsCliBindableParameterType(Type parameterType)
+    {
+        return parameterType == typeof(string) || parameterType.IsValueType;
+    }
+
     {
         var appName = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "app";
 
@@ -430,8 +435,8 @@ public static class CommandHostBuilderExtensions
             {
                 var pType = p.ParameterType;
 
-                // Skip DI-resolved parameters (reference types that are not string)
-                if (pType != typeof(string) && !pType.IsValueType)
+                // Skip DI-resolved parameters.
+                if (!IsCliBindableParameterType(pType))
                     continue;
 
                 var opt = p.GetCustomAttribute<OptionAttribute>();
