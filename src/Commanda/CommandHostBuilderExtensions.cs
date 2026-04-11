@@ -444,7 +444,7 @@ public static class CommandHostBuilderExtensions
                 {
                     var alias = string.IsNullOrWhiteSpace(opt.Name) ? ToKebabCase(p.Name!) : opt.Name!;
                     if (pType == typeof(bool))
-                        parts.Add($"[--{alias}]");
+                        parts.Add($"[--{alias} [<{GetTypeName(pType)}>]]");
                     else
                         parts.Add($"[--{alias} <{GetTypeName(pType)}>]");
                 }
@@ -472,13 +472,29 @@ public static class CommandHostBuilderExtensions
 
     private static string GetTypeName(Type type)
     {
+        var underlyingType = Nullable.GetUnderlyingType(type);
+        if (underlyingType is not null)
+            return $"{GetTypeName(underlyingType)}?";
+
         if (type == typeof(string)) return "string";
-        if (type == typeof(int)) return "int";
-        if (type == typeof(long)) return "long";
-        if (type == typeof(double)) return "double";
-        if (type == typeof(float)) return "float";
         if (type == typeof(bool)) return "bool";
+        if (type == typeof(char)) return "char";
+        if (type == typeof(byte)) return "byte";
+        if (type == typeof(sbyte)) return "sbyte";
+        if (type == typeof(short)) return "short";
+        if (type == typeof(ushort)) return "ushort";
+        if (type == typeof(int)) return "int";
+        if (type == typeof(uint)) return "uint";
+        if (type == typeof(long)) return "long";
+        if (type == typeof(ulong)) return "ulong";
+        if (type == typeof(float)) return "float";
+        if (type == typeof(double)) return "double";
         if (type == typeof(decimal)) return "decimal";
+        if (type == typeof(DateTime)) return "datetime";
+        if (type == typeof(DateTimeOffset)) return "datetimeoffset";
+        if (type == typeof(TimeSpan)) return "timespan";
+        if (type == typeof(Guid)) return "guid";
+
         return type.Name.ToLowerInvariant();
     }
 
