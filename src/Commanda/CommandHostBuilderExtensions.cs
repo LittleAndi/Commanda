@@ -415,27 +415,66 @@ public static class CommandHostBuilderExtensions
 
     private static void PrintHelp(CommandRegistry registry)
     {
-        Console.WriteLine("Available commands:");
+        var appName = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "app";
+
+        Console.WriteLine($"Usage: {appName} <command> [options]");
+        Console.WriteLine();
+        Console.WriteLine("Commands:");
+
+        var rows = new List<(string Usage, string Description)>();
+
         foreach (var d in registry.Descriptors.OrderBy(d => d.Name))
         {
             var parts = new List<string>();
             foreach (var p in d.Parameters)
             {
+                var pType = p.ParameterType;
+
+                // Skip DI-resolved parameters (reference types that are not string)
+                if (pType != typeof(string) && !pType.IsValueType)
+                    continue;
+
                 var opt = p.GetCustomAttribute<OptionAttribute>();
                 if (opt != null)
                 {
                     var alias = string.IsNullOrWhiteSpace(opt.Name) ? ToKebabCase(p.Name!) : opt.Name!;
-                    var desc = string.IsNullOrWhiteSpace(opt.Description) ? string.Empty : $" : {opt.Description}";
-                    parts.Add($"[--{alias}{desc}]");
+                    if (pType == typeof(bool))
+                        parts.Add($"[--{alias}]");
+                    else
+                        parts.Add($"[--{alias} <{GetTypeName(pType)}>]");
                 }
                 else
                 {
-                    parts.Add(p.Name!);
+                    parts.Add($"<{p.Name}>");
                 }
             }
-            Console.WriteLine($"  {d.Name} {string.Join(" ", parts)}    {d.Description}");
+
+            var usageParts = parts.Count > 0 ? " " + string.Join(" ", parts) : string.Empty;
+            var usage = $"  {d.Name}{usageParts}";
+            var description = string.IsNullOrWhiteSpace(d.Description) ? "(no description)" : d.Description;
+            rows.Add((usage, description));
         }
-        Console.WriteLine("Use --help for detailed help if supported.");
+
+        var maxWidth = rows.Count > 0 ? rows.Max(r => r.Usage.Length) : 0;
+        foreach (var (usage, description) in rows)
+        {
+            Console.WriteLine($"{usage.PadRight(maxWidth + 3)}{description}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"Run '{appName} <command> --help' for more information on a command.");
+    }
+
+    private static string GetTypeName(Type type)
+    {
+        if (type == typeof(string)) return "string";
+        if (type == typeof(int)) return "int";
+        if (type == typeof(long)) return "long";
+        if (type == typeof(double)) return "double";
+        if (type == typeof(float)) return "float";
+        if (type == typeof(bool)) return "bool";
+        if (type == typeof(decimal)) return "decimal";
+        return type.Name.ToLowerInvariant();
     }
 
     private static string ToKebabCase(string name)
