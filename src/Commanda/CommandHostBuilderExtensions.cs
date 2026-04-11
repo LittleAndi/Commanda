@@ -213,7 +213,7 @@ public static class CommandHostBuilderExtensions
                 var p = parameters[i];
                 var pType = p.ParameterType;
 
-                if (pType != typeof(string) && !pType.IsValueType)
+                if (!IsCliBindableParameterType(pType))
                 {
                     diParams.Add(new DependencyInjectionParameter(i, pType));
                     continue;
@@ -335,7 +335,7 @@ public static class CommandHostBuilderExtensions
     private static bool NeedsDefaultValue(ParameterContext context)
     {
         if (context.CurrentValue != null) return false;
-        if (context.Parameter.ParameterType != typeof(string) && !context.Parameter.ParameterType.IsValueType) return false;
+        if (!IsCliBindableParameterType(context.Parameter.ParameterType)) return false;
         return true;
     }
 
@@ -413,29 +413,89 @@ public static class CommandHostBuilderExtensions
         }
     }
 
+    private static bool IsCliBindableParameterType(Type parameterType)
+    {
+        return parameterType == typeof(string) || parameterType.IsValueType;
+    }
+
     private static void PrintHelp(CommandRegistry registry)
     {
-        Console.WriteLine("Available commands:");
+        var appName = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "app";
+
+        Console.WriteLine($"Usage: {appName} <command> [options]");
+        Console.WriteLine();
+        Console.WriteLine("Commands:");
+
+        var rows = new List<(string Usage, string Description)>();
+
         foreach (var d in registry.Descriptors.OrderBy(d => d.Name))
         {
             var parts = new List<string>();
             foreach (var p in d.Parameters)
             {
+                var pType = p.ParameterType;
+
+                // Skip DI-resolved parameters.
+                if (!IsCliBindableParameterType(pType))
+                    continue;
+
                 var opt = p.GetCustomAttribute<OptionAttribute>();
                 if (opt != null)
                 {
                     var alias = string.IsNullOrWhiteSpace(opt.Name) ? ToKebabCase(p.Name!) : opt.Name!;
-                    var desc = string.IsNullOrWhiteSpace(opt.Description) ? string.Empty : $" : {opt.Description}";
-                    parts.Add($"[--{alias}{desc}]");
+                    if (pType == typeof(bool))
+                        parts.Add($"[--{alias}]");
+                    else
+                        parts.Add($"[--{alias} <{GetTypeName(pType)}>]");
                 }
                 else
                 {
-                    parts.Add(p.Name!);
+                    parts.Add($"<{p.Name}>");
                 }
             }
-            Console.WriteLine($"  {d.Name} {string.Join(" ", parts)}    {d.Description}");
+
+            var usageParts = parts.Count > 0 ? " " + string.Join(" ", parts) : string.Empty;
+            var usage = $"  {d.Name}{usageParts}";
+            var description = string.IsNullOrWhiteSpace(d.Description) ? "(no description)" : d.Description;
+            rows.Add((usage, description));
         }
-        Console.WriteLine("Use --help for detailed help if supported.");
+
+        var maxWidth = rows.Count > 0 ? rows.Max(r => r.Usage.Length) : 0;
+        foreach (var (usage, description) in rows)
+        {
+            Console.WriteLine($"{usage.PadRight(maxWidth + 3)}{description}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"Run '{appName} <command> --help' for more information on a command.");
+    }
+
+    private static string GetTypeName(Type type)
+    {
+        var underlyingType = Nullable.GetUnderlyingType(type);
+        if (underlyingType is not null)
+            return $"{GetTypeName(underlyingType)}?";
+
+        if (type == typeof(string)) return "string";
+        if (type == typeof(bool)) return "bool";
+        if (type == typeof(char)) return "char";
+        if (type == typeof(byte)) return "byte";
+        if (type == typeof(sbyte)) return "sbyte";
+        if (type == typeof(short)) return "short";
+        if (type == typeof(ushort)) return "ushort";
+        if (type == typeof(int)) return "int";
+        if (type == typeof(uint)) return "uint";
+        if (type == typeof(long)) return "long";
+        if (type == typeof(ulong)) return "ulong";
+        if (type == typeof(float)) return "float";
+        if (type == typeof(double)) return "double";
+        if (type == typeof(decimal)) return "decimal";
+        if (type == typeof(DateTime)) return "datetime";
+        if (type == typeof(DateTimeOffset)) return "datetimeoffset";
+        if (type == typeof(TimeSpan)) return "timespan";
+        if (type == typeof(Guid)) return "guid";
+
+        return type.Name.ToLowerInvariant();
     }
 
     private static string ToKebabCase(string name)
