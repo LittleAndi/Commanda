@@ -213,7 +213,7 @@ public static class CommandHostBuilderExtensions
                 var p = parameters[i];
                 var pType = p.ParameterType;
 
-                if (pType != typeof(string) && !pType.IsValueType)
+                if (!IsCliBindableParameterType(pType))
                 {
                     diParams.Add(new DependencyInjectionParameter(i, pType));
                     continue;
@@ -335,7 +335,7 @@ public static class CommandHostBuilderExtensions
     private static bool NeedsDefaultValue(ParameterContext context)
     {
         if (context.CurrentValue != null) return false;
-        if (context.Parameter.ParameterType != typeof(string) && !context.Parameter.ParameterType.IsValueType) return false;
+        if (!IsCliBindableParameterType(context.Parameter.ParameterType)) return false;
         return true;
     }
 
@@ -413,12 +413,12 @@ public static class CommandHostBuilderExtensions
         }
     }
 
-    private static void PrintHelp(CommandRegistry registry)
     private static bool IsCliBindableParameterType(Type parameterType)
     {
         return parameterType == typeof(string) || parameterType.IsValueType;
     }
 
+    private static void PrintHelp(CommandRegistry registry)
     {
         var appName = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "app";
 
@@ -444,7 +444,7 @@ public static class CommandHostBuilderExtensions
                 {
                     var alias = string.IsNullOrWhiteSpace(opt.Name) ? ToKebabCase(p.Name!) : opt.Name!;
                     if (pType == typeof(bool))
-                        parts.Add($"[--{alias} [<{GetTypeName(pType)}>]]");
+                        parts.Add($"[--{alias}]");
                     else
                         parts.Add($"[--{alias} <{GetTypeName(pType)}>]");
                 }
