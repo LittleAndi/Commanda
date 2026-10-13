@@ -9,6 +9,10 @@ It starts with the first release to nuget.org, version `0.2.0`.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated dependencies: System.CommandLine 2.0.13, Microsoft.Extensions.Hosting 9.0.21 / 10.0.13, Nerdbank.GitVersioning 3.10.94
+
 ---
 
 ## [0.2.0] - 2026-01-17
